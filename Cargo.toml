@@ -1,0 +1,9 @@
+[package]
+name = "strason"
+version = "0.1.0"
+authors = ["Andrew Poelstra <apoelstra@wpsoftware.net>"]
+
+[dependencies]
+encoding = "0.2"
+serde = "0.6"
+
