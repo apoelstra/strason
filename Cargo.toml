@@ -2,6 +2,12 @@
 name = "strason"
 version = "0.1.0"
 authors = ["Andrew Poelstra <apoelstra@wpsoftware.net>"]
+license = "CC0-1.0"
+license-file = "LICENSE"
+homepage = "https://github.com/apoelstra/strason/"
+repository = "https://github.com/apoelstra/strason/"
+documentation = "https://www.wpsoftware.net/rustdoc/strason/"
+description = "Json parser that preserves field ordering and stores numbers as strings, preserving their full data"
 
 [dependencies]
 encoding = "0.2"
