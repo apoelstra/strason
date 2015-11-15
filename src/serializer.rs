@@ -72,25 +72,19 @@ pub fn serialize<W: io::Write>(json: &Json, w: &mut W) -> io::Result<()> {
             }
             try!(w.write(b"]"));
         }
-        JsonInner::Object(ref m, ref v) => {
+        JsonInner::Object(ref v) => {
             try!(w.write(b"{"));
             let mut first = true;
-            // Unsafe block needed since we are borrowing the StringRefs in
-            // here. This is OK because these references live as long as the
-            // hashmap, which we are borrowing (as `m`) for the duration of
-            // this block anyway.
-            unsafe {
-                for key in v.iter().map(|k| k.borrow()) {
-                    if !first {
-                        try!(w.write(b", "));
-                    }
-                    try!(serialize_string(key, &mut *w));
-                    try!(w.write(b": "));
-                    try!(serialize(&m[key], &mut *w));
-                    first = false;
+            for &(ref key, ref val) in v {
+                if !first {
+                    try!(w.write(b", "));
                 }
-                try!(w.write(b"}"));
+                try!(serialize_string(key, &mut *w));
+                try!(w.write(b": "));
+                try!(serialize(val, &mut *w));
+                first = false;
             }
+            try!(w.write(b"}"));
         }
     };
     Ok(())

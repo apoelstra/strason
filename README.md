@@ -6,11 +6,22 @@ Support for stringly-typed Json parsing and serialization.
 
 [Documentation](https://www.wpsoftware.net/rustdoc/strason/)
 
-The main motivation for this project is to support projects which encode bignums as
-Json numbers, which would be lossily decoded by libraries such as serde, which
-read numbers into Rust floating-point types. A secondary motivation is projects
-which manipulate Json structures but don't really process the values, for which
-the overhead of de/serializing strings into other types is unnecessary.
+This project differs from other Json parsers in three main ways:
+
+1. Numbers are read as strings and stored as strings. It is the responsibility
+   of the calling code to parse them. (They are validated to be valid Json
+   numbers.)
+
+2. The order of fields in Json objects is preserved, for applicatons that care
+   about this. Note that this means objects are stored as a `Vec` of (key, value)
+   pairs which means accessing fields by name takes linear time. Callers who
+   need to do this may have to unload into their own `HashMap`.
+
+   It also means that `Json` objects will not test equal unless the order of their
+   fields matches.
+
+3. Multiple fields with the same name can be stored and serialized. This shouldn't
+   ever be done, but is useful for interoperating with buggy software.
 
 The library has one type, `Json`, which is defined as follows:
 ```rust
@@ -20,13 +31,13 @@ pub enum Json {
     Number(String),
     String(String),
     Array(Vec<Json>),
-    Object(HashMap<String, Json>)
+    Object(Vec<(String, Json)>)
 }
 ```
 That is, except for nulls and booleans, all data are represented by strings.
-(Actually, the real implementation is hidden, and has some extra data to
-track, for example, the order that object entries were added in. This is
-to prevent reordering of fields on reserialization.)
+(Actually, the real implementation is hidden, to give me freedom to add, e.g.
+indexing support for `Json::Object`s or something without breaking. But this
+is what it looks like now.)
 
 These objects can be created from raw byte data by the method
 `Json::from_iter`, `Json::from_str` and `Json::from_reader`. They can
@@ -35,7 +46,11 @@ be reserialized with the `Json::to_bytes()` method.
 Full compliance with ECMA 404 is expected. Any deviations are bugs.
 
 All byte inputs should round-trip (deserialize then serialize) to the same
-thing, up to variations in whitespace. Any deviations are bugs.
+thing, up to (a) variations in whitespace, (b) escaping of the `/` character
+in strings, (c) choice of when to use Unicode `\uXXXX` escapes, and the
+capitalization of them. Also UCS-2 points that are not UTF-16 (there are few
+of these and they are meaningless anyway) will be rejected at parse time,
+unlike most parsers in use. Any deviations beyond this are bugs.
 
 # Usage
 

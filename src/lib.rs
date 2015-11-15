@@ -30,43 +30,10 @@
 extern crate encoding;
 extern crate serde;
 
-use std::collections::HashMap;
 use std::{io, ops};
 
 pub mod parser;
 pub mod serializer;
-
-/// This is roughly a "*mut str"
-#[allow(raw_pointer_derive)]
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-struct UnsafeStringRef {
-    ptr: *mut u8,
-    len: usize,
-    cap: usize
-}
-
-impl UnsafeStringRef {
-    /// Extract the raw pointer data from a String. This object will be invalidated
-    /// if the String is ever reallocated or dropped!
-    unsafe fn from_string(s: &mut String) -> UnsafeStringRef {
-        let v = s.as_mut_vec();
-        UnsafeStringRef {
-            ptr: v.as_mut_ptr(),
-            len: v.len(),
-            cap: v.capacity()
-        }
-    }
-
-    /// Obtain a &str from a UnsafeStringRef. Note that as lifetimes are not tracked,
-    /// the compiler will not prevent this pointing to invalidated memory!
-    unsafe fn borrow(&self) -> &str {
-        use std::mem;
-        let owned_s = String::from_raw_parts(self.ptr, self.len, self.cap);
-        let forever_ref = mem::transmute::<_, &'static str>(&owned_s[..]);
-        mem::forget(owned_s);
-        forever_ref
-    }
-}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum JsonInner {
@@ -80,8 +47,8 @@ enum JsonInner {
     String(String),
     /// An array of other Json objects
     Array(Vec<Json>),
-    /// A map of Strings to Json objects
-    Object(HashMap<String, Json>, Vec<UnsafeStringRef>)
+    /// An ordered map of Strings to Json objects
+    Object(Vec<(String, Json)>)
 }
 
 /// A "stringly-typed" Json object. That is, either a value (represented
@@ -116,7 +83,7 @@ impl Json {
     /// Returns the value, if this is an array
     pub fn array(&self) -> Option<&[Json]> { if let JsonInner::Array(ref x) = self.0 { Some(&x[..]) } else { None } }
     /// Returns the value, if this is an object
-    pub fn object(&self) -> Option<&HashMap<String, Json>> { if let JsonInner::Object(ref x, _) = self.0 { Some(&x) } else { None } }
+    pub fn object(&self) -> Option<&[(String, Json)]> { if let JsonInner::Object(ref x) = self.0 { Some(&x[..]) } else { None } }
 
     /// Return the number of subobjects this object represents
     /// (so a count for Arrays and Objects). NOT a string length.
@@ -127,7 +94,7 @@ impl Json {
             JsonInner::String(_) => 1,
             JsonInner::Number(_) => 1,
             JsonInner::Array(ref v) => v.len(),
-            JsonInner::Object(ref m, _) => m.len()
+            JsonInner::Object(ref v) => v.len()
         }
     }
 
@@ -139,7 +106,7 @@ impl Json {
             JsonInner::String(_) => false,
             JsonInner::Number(_) => false,
             JsonInner::Array(ref v) => v.is_empty(),
-            JsonInner::Object(ref m, _) => m.is_empty()
+            JsonInner::Object(ref v) => v.is_empty()
         }
     }
 
@@ -160,8 +127,13 @@ impl<'a> ops::Index<&'a str> for Json {
     type Output = Json;
     #[inline]
     fn index(&self, index: &'a str) -> &Json {
-        if let JsonInner::Object(ref m, _) = self.0 {
-            &m[index]
+        if let JsonInner::Object(ref v) = self.0 {
+            for &(ref key, ref obj) in v {
+                if key == index {
+                    return obj;
+                }
+            }
+            panic!("Json object accessed with non-existent index!");
         } else {
             panic!("Tried to index a non-object Json object as an object!");
         }

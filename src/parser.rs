@@ -19,10 +19,9 @@ use encoding::{Encoding, DecoderTrap};
 use encoding::all::UTF_16BE;
 use std::{error, fmt, io, num};
 use std::borrow::Cow;
-use std::collections::HashMap;
 use serde::iter::LineColIterator;
 
-use {Json, JsonInner, UnsafeStringRef};
+use {Json, JsonInner};
 
 /// The type of a Json parsing error
 #[derive(Debug)]
@@ -409,8 +408,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
             // objects TODO
             b'{' => {
                 self.eat();
-                let mut ret = HashMap::new();  // actual map of strings to objects
-                let mut refs = vec![];         // vector of references to keys, used to maintain ordering
+                let mut ret = vec![];
                 loop {
                     try_at!(self, self.eat_whitespace());
                     // special-case {}
@@ -419,7 +417,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                         break;
                     }
                     // parse key
-                    let mut key = try_at!(self, self.parse_string());
+                    let key = try_at!(self, self.parse_string());
                     try_at!(self, self.eat_whitespace());
                     // parse : separator
                     let sep_ch = try_at!(self, self.peek_noeof());
@@ -431,13 +429,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                     }
                     // parse value
                     let val = try!(self.parse());
-                    // Unsafety as we are taking an unsafe reference to the hashmap keys.
-                    // This is safe because the API of this object does not allow the
-                    // hashmap to be destroyed without also destroying the references.
-                    // Further, we promise not to mutate the keys once they're in the
-                    // map.
-                    unsafe { refs.push(UnsafeStringRef::from_string(&mut key)); }
-                    ret.insert(key, val);
+                    ret.push((key, val));
                     try_at!(self, self.eat_whitespace());
                     // parse , separator
                     match try_at!(self, self.peek_noeof()) {
@@ -446,7 +438,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                         x => { return Err(Error::at(&self.iter, ErrorType::UnexpectedCharacter(x as char))); }
                     }
                 }
-                Ok(Json(JsonInner::Object(ret, refs)))
+                Ok(Json(JsonInner::Object(ret)))
             }
             _ => Err(Error::at(&self.iter, ErrorType::UnknownIdent))
         }
@@ -455,8 +447,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use {Json, JsonInner, UnsafeStringRef};
+    use {Json, JsonInner};
 
     macro_rules! jnull( () => (Json(JsonInner::Null)) );
     macro_rules! jbool( ($e:expr) => (Json(JsonInner::Bool($e))) );
@@ -465,16 +456,11 @@ mod tests {
     macro_rules! jarr( ($($e:expr),*) => (Json(JsonInner::Array(vec![$($e),*]))) );
     macro_rules! jobj( ($($k:expr => $v:expr),*) => ({
         let mut vec = vec![];
-        let mut map = HashMap::new();
-        &mut map;  /* dummy "use as mut" to avoid errors in case of no inserts */
-        &mut vec;
+        &mut vec;  /* dummy "use as mut" to avoid errors in case of no inserts */
         $(
-            let mut s = $k.to_owned();
-            // Unsafety ok because unit test ;)
-            unsafe { vec.push(UnsafeStringRef::from_string(&mut s)); }
-            map.insert(s, $v);
+            vec.push(($k.to_owned(), $v));
         )*
-        Json(JsonInner::Object(map, vec))
+        Json(JsonInner::Object(vec))
     }) );
 
     #[test]
@@ -555,9 +541,7 @@ mod tests {
         assert_eq!(Json::from_str("{\"key\": []}").unwrap(), jobj!["key" => jarr![]]);
 
         assert_eq!(Json::from_str("{\"key1\": \"val\", \"key2\": \"val\"}").unwrap(), jobj!["key1" => jstr!("val"), "key2" => jstr!("val")]);
-        // Unsure what the best behaviour is here, but adding a test
-        // so we'll notice if the current behaviour changes.
-        assert_eq!(Json::from_str("{\"key\": \"val\", \"key\": \"val2\"}").unwrap(), jobj!["key" => jstr!("val2")]);
+        assert_eq!(Json::from_str("{\"key\": \"val\", \"key\": \"val2\"}").unwrap(), jobj!["key" => jstr!("val"), "key" => jstr!("val2")]);
 
         assert!(Json::from_str("{{}}").is_err());
         assert!(Json::from_str("{,}").is_err());
