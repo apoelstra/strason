@@ -33,6 +33,7 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
             '\r' => { try!(w.write(b"\\r")); }
             '\t' => { try!(w.write(b"\\t")); }
             '\\' => { try!(w.write(b"\\\\")); }
+            '"' => { try!(w.write(b"\\\"")); }
             '\x00'...'\x7f' => { try!(w.write(&[ch as u8])); }
             _ => {
                 let mut ch_bytes = [0u8; 4];
@@ -162,6 +163,7 @@ mod tests {
         assert!(round_trip("[ ]"));
         assert!(round_trip("{ }"));
         assert!(round_trip("\"     \\t\\n\\t     \""));
+        assert!(round_trip("\"\\\"\""));
 
         assert!(round_trip("\"\\n\\r\\f\\b\\\\\""));
 
