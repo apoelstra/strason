@@ -43,6 +43,15 @@ These objects can be created from raw byte data by the method
 `Json::from_iter`, `Json::from_str` and `Json::from_reader`. They can
 be reserialized with the `Json::to_bytes()` method.
 
+Alternately, `Json` objects can be created using `std::From`, such as
+```
+let s = "A regular old Rust string".to_owned();
+let json = From::from(s);
+```
+Implementations are available for all integer types, as well as `bool`, `String`
+and `()`. To construct a JSON number from a string, use `Json::from_str` as
+above so that the number can be validated to have correct form.
+
 Full compliance with ECMA 404 is expected. Any deviations are bugs.
 
 All byte inputs should round-trip (deserialize then serialize) to the same

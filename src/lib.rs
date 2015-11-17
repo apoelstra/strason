@@ -123,6 +123,47 @@ impl Json {
     }
 }
 
+impl From<()> for Json {
+    fn from(_: ()) -> Json {
+        Json(JsonInner::Null)
+    }
+}
+
+impl From<bool> for Json {
+    fn from(t: bool) -> Json {
+        Json(JsonInner::Bool(t))
+    }
+}
+
+macro_rules! format_from_impl(
+    ($t:ty) => {
+        impl From<$t> for Json {
+            fn from(n: $t) -> Json {
+                Json(JsonInner::Number(format!("{}", n)))
+            }
+        }
+    }
+);
+
+format_from_impl!(usize);
+format_from_impl!(u64);
+format_from_impl!(u32);
+format_from_impl!(u16);
+format_from_impl!(u8);
+format_from_impl!(isize);
+format_from_impl!(i64);
+format_from_impl!(i32);
+format_from_impl!(i16);
+format_from_impl!(i8);
+format_from_impl!(f64);
+format_from_impl!(f32);
+
+impl From<String> for Json {
+    fn from(s: String) -> Json {
+        Json(JsonInner::String(s))
+    }
+}
+
 impl<'a> ops::Index<&'a str> for Json {
     type Output = Json;
     #[inline]
@@ -299,6 +340,25 @@ mod tests {
         assert!(mt_arr.is_empty());
         let mt_obj = Json::from_str("{}").unwrap();
         assert!(mt_obj.is_empty());
+    }
+
+    #[test]
+    fn from() {
+        assert_eq!(Json::from_str("123").unwrap(), From::from(123u8));
+        assert_eq!(Json::from_str("123").unwrap(), From::from(123u16));
+        assert_eq!(Json::from_str("123").unwrap(), From::from(123u32));
+        assert_eq!(Json::from_str("123").unwrap(), From::from(123u64));
+        assert_eq!(Json::from_str("-123").unwrap(), From::from(-123i8));
+        assert_eq!(Json::from_str("-123").unwrap(), From::from(-123i16));
+        assert_eq!(Json::from_str("-123").unwrap(), From::from(-123i32));
+        assert_eq!(Json::from_str("-123").unwrap(), From::from(-123i64));
+        assert_eq!(Json::from_str("-103.375").unwrap(), From::from(-103.375f32));
+        assert_eq!(Json::from_str("-103.375").unwrap(), From::from(-103.375f64));
+        assert_eq!(Json::from_str("true").unwrap(), From::from(true));
+        assert_eq!(Json::from_str("false").unwrap(), From::from(false));
+        assert_eq!(Json::from_str("null").unwrap(), From::from(()));
+
+        assert_eq!(Json::from_str("[]").unwrap(), From::from(Json::from_str("[]").unwrap()));
     }
 }
 
