@@ -67,6 +67,6 @@ To use strason, just add the following to your Cargo.toml.
 
 ```toml
 [dependencies]
-strason = "0.1"
+strason = "0.2"
 ```
 
