@@ -19,6 +19,7 @@ use encoding::{Encoding, DecoderTrap};
 use encoding::all::UTF_16BE;
 use std::{error, fmt, io, num};
 use std::borrow::Cow;
+use serde::de;
 use serde::iter::LineColIterator;
 
 use {Json, JsonInner};
@@ -26,6 +27,12 @@ use {Json, JsonInner};
 /// The type of a Json parsing error
 #[derive(Debug)]
 pub enum ErrorType {
+    /// Syntax error interpreting Json
+    Syntax(String),
+    /// Missing field interpreting Json
+    MissingField(&'static str),
+    /// Unknown field
+    UnknownField(String),
     /// Expected a string, got something else
     ExpectedString,
     /// end-of-file reached before json was complete
@@ -76,6 +83,10 @@ impl Error {
     }
 }
 
+impl From<ErrorType> for Error {
+    fn from(e: ErrorType) -> Error { Error { line: 0, col: 0, error: e } }
+}
+
 /// A macro which acts like try! but attaches line/column info to the error
 macro_rules! try_at(
     ($s:expr, $e:expr) => (
@@ -95,6 +106,9 @@ impl fmt::Display for Error {
             ErrorType::Io(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
             ErrorType::Unicode(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
             ErrorType::Utf16(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
+            ErrorType::MissingField(ref s) => write!(f, "missing field `{}`", s),
+            ErrorType::UnknownField(ref s) => write!(f, "unknown field `{}`", s),
+            ErrorType::Syntax(ref s) => write!(f, "syntax error: {}", s),
             _ => write!(f, "{}:{}: {}", self.line, self.col, error::Error::description(self))
         }
     }
@@ -102,10 +116,10 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {
     fn cause(&self) -> Option<&error::Error> {
-        if let ErrorType::Io(ref e) = self.error {
-            Some(e)
-        } else {
-            None
+        match self.error {
+            ErrorType::Io(ref e) => Some(e),
+            ErrorType::Unicode(ref e) => Some(e),
+            _ => None
         }
     }
 
@@ -119,8 +133,29 @@ impl error::Error for Error {
             ErrorType::UnknownIdent => "unknown ident",
             ErrorType::Unicode(ref e) => error::Error::description(e),
             ErrorType::Utf16(ref e) => e,
-            ErrorType::Io(ref e) => error::Error::description(e)
+            ErrorType::Io(ref e) => error::Error::description(e),
+            ErrorType::MissingField(_) => "missing field",
+            ErrorType::UnknownField(_) => "unknown field",
+            ErrorType::Syntax(_) => "syntax error"
         }
+    }
+}
+
+impl de::Error for Error {
+    fn syntax(s: &str) -> Error {
+        Error { line: 0, col: 0, error: ErrorType::Syntax(s.to_owned()) }
+    }
+
+    fn end_of_stream() -> Error {
+        Error { line: 0, col: 0, error: ErrorType::UnexpectedEOF }
+    }
+
+    fn unknown_field(s: &str) -> Error {
+        Error { line: 0, col: 0, error: ErrorType::UnknownField(s.to_owned()) }
+    }
+
+    fn missing_field(s: &'static str) -> Error {
+        Error { line: 0, col: 0, error: ErrorType::MissingField(s) }
     }
 }
 

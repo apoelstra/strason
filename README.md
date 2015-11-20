@@ -70,3 +70,22 @@ To use strason, just add the following to your Cargo.toml.
 strason = "0.2"
 ```
 
+# Serialization and Deserialization
+
+The `Json` object does not directly support de/serialization through serde. The
+reason is that the serde API is inherently lossy, not having any support for
+large numbers. Therefore de/serialization of arbitrary objects as JSON needs
+to happen in two steps, using `Json` as an intermediary.
+
+Serialization thus looks something like
+```rust
+let json = strason::from_serialize(my_object).unwrap():
+let output = json.to_bytes();
+```
+and deserialization like:
+```rust
+let input_json = strason::from_reader(my_data_source);
+let output = input_json.into_deserialize();
+```
+
+

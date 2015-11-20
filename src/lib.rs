@@ -34,6 +34,10 @@ use std::{io, ops};
 
 pub mod parser;
 pub mod serializer;
+pub mod object;
+
+pub use parser::Error;
+pub use object::from_serialize;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum JsonInner {
@@ -121,6 +125,11 @@ impl Json {
         self.write_to(&mut ret).unwrap();
         ret
     }
+
+    /// Convert the Json object to something deserializable
+    pub fn into_deserialize<T: serde::de::Deserialize>(self) -> Result<T, Error> {
+        object::into_deserialize(self)
+    }
 }
 
 impl From<()> for Json {
@@ -161,6 +170,18 @@ format_from_impl!(f32);
 impl From<String> for Json {
     fn from(s: String) -> Json {
         Json(JsonInner::String(s))
+    }
+}
+
+impl From<Vec<Json>> for Json {
+    fn from(v: Vec<Json>) -> Json {
+        Json(JsonInner::Array(v))
+    }
+}
+
+impl From<Vec<(String, Json)>> for Json {
+    fn from(v: Vec<(String, Json)>) -> Json {
+        Json(JsonInner::Object(v))
     }
 }
 
