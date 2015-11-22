@@ -490,6 +490,8 @@ mod tests {
         roundtrip_success!(String, "Thing");
         roundtrip_success!(bool, false);
         roundtrip_success!(bool, true);
+        roundtrip_success!(f64, 1.125);
+        roundtrip_success!(f32, 1.125);
 
         macro_rules! check_num(
            ($t:ident) => ({
