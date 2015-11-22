@@ -267,7 +267,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                         return Err(ErrorType::MalformedNumber);
                     }
                 }
-                b' ' | b'\r' | b'\n' | b']' | b',' | b':' => {
+                b' ' | b'\r' | b'\n' | b'}' | b']' | b',' | b':' => {
                     break;
                 }
                 b'e' | b'E' => {
@@ -574,6 +574,8 @@ mod tests {
         assert_eq!(Json::from_str("{\"key\": \"val\"}").unwrap(), jobj!["key" => jstr!("val")]);
         assert_eq!(Json::from_str("{\"key\": false}").unwrap(), jobj!["key" => jbool!(false)]);
         assert_eq!(Json::from_str("{\"key\": []}").unwrap(), jobj!["key" => jarr![]]);
+
+        assert_eq!(Json::from_str("{\"key\": 1234}").unwrap(), jobj!["key" => jnum!("1234")]);
 
         assert_eq!(Json::from_str("{\"key1\": \"val\", \"key2\": \"val\"}").unwrap(), jobj!["key1" => jstr!("val"), "key2" => jstr!("val")]);
         assert_eq!(Json::from_str("{\"key\": \"val\", \"key\": \"val2\"}").unwrap(), jobj!["key" => jstr!("val"), "key" => jstr!("val2")]);
