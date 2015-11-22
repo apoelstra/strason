@@ -31,6 +31,7 @@ extern crate encoding;
 extern crate serde;
 #[cfg(test)] extern crate serde_json;
 
+use serde::ser;
 use std::{io, ops};
 
 pub mod parser;
@@ -75,6 +76,11 @@ impl Json {
     /// Construct a Json object from a reader
     pub fn from_reader<R: io::Read>(r: R) -> Result<Json, parser::Error> {
         Json::from_iter(r.bytes())
+    }
+
+    /// Construct a Json object from a Serialize type
+    pub fn from_serialize<T: ser::Serialize>(t: &T) -> Result<Json, parser::Error> {
+        object::from_serialize(t)
     }
 
     /// Returns a null, if this is a null
