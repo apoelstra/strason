@@ -21,6 +21,95 @@ use serde::{de, ser};
 use parser::{Error, ErrorType};
 use {Json, JsonInner};
 
+static EVIL_SENTINEL: &'static str = "$$$STRASON$$$EVIL$$$MODE$$$";
+
+impl de::Deserialize for Json {
+    fn deserialize<D: de::Deserializer>(d: &mut D) -> Result<Json, D::Error> {
+        if <D as de::Deserializer>::format() == "strason" {
+            // This `EvilVisitor` type is a nasty hack to get a reference
+            // to the deserializer's inner state, which will be a Json
+            // object if the deserializer is our Deserializer. It has to
+            // do this via the de::Visitor trait, which lets us return
+            // Json values no problem but not input arbitrary data (just
+            // Rust primitive types, none of which are pointers). So we
+            // signal the deserializer using the string input of
+            // `Deserializer::visit_unit_struct` to say "hey, it's us, Json"
+            // and it'll respond by passing a reference to its inner state
+            // hidden inside a usize.
+            struct EvilVisitor;
+            impl de::Visitor for EvilVisitor {
+                type Value = Json;
+                fn visit_usize<E: de::Error>(&mut self, v: usize) -> Result<Json, E> {
+                   unsafe {
+                       let ptr = v as *mut Option<Json>;
+                       Ok((*ptr).take().unwrap())
+                   }
+                }
+            }
+
+            d.visit_unit_struct(EVIL_SENTINEL, EvilVisitor)
+        // After that madness, actual deserialization code follows
+        } else {
+            struct GoodVisitor;
+            impl de::Visitor for GoodVisitor {
+                type Value = Json;
+                fn visit_bool<E>(&mut self, val: bool) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Bool(val)))
+                }
+
+                fn visit_i64<E>(&mut self, val: i64) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Number(format!("{}", val))))
+                }
+
+                fn visit_u64<E>(&mut self, val: u64) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Number(format!("{}", val))))
+                }
+
+                fn visit_f64<E>(&mut self, val: f64) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Number(format!("{}", val))))
+                }
+
+                fn visit_str<E>(&mut self, val: &str) -> Result<Json, E> {
+                    Ok(Json(JsonInner::String(val.to_owned())))
+                }
+
+                fn visit_string<E>(&mut self, val: String) -> Result<Json, E> {
+                    Ok(Json(JsonInner::String(val)))
+                }
+
+                fn visit_unit<E>(&mut self) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Null))
+                }
+
+                fn visit_none<E>(&mut self) -> Result<Json, E> {
+                    Ok(Json(JsonInner::Null))
+                }
+
+                fn visit_some<D: de::Deserializer>(&mut self, d: &mut D) -> Result<Json, D::Error> {
+                    de::Deserialize::deserialize(d)
+                }
+
+                fn visit_seq<V: de::SeqVisitor>(&mut self, v: V) -> Result<Json, V::Error> {
+                    let arr = try!(de::impls::VecVisitor::new().visit_seq(v));
+                    Ok(Json(JsonInner::Array(arr)))
+                }
+
+                fn visit_map<V: de::MapVisitor>(&mut self, mut v: V) -> Result<Json, V::Error> {
+                    let mut ret = vec![];
+                    while let Some(keyval) = try!(v.visit()) {
+                        ret.push(keyval);
+                    }
+                    try!(v.end());
+                    Ok(Json(JsonInner::Object(ret)))
+                }
+            }
+
+            d.visit(GoodVisitor)
+        }
+    }
+}
+
+
 /// A "Json to whatever" deserializer
 pub struct Deserializer {
     current: Option<Json>
@@ -71,6 +160,25 @@ impl de::Deserializer for Deserializer {
            Some(_) => v.visit_some(self),
            None => { return Err(de::Error::end_of_stream()); }
        }
+    }
+
+    fn format() -> &'static str { "strason" }
+
+    // Special-case for evil visitor: if we have a specially-constructed Visitor,
+    // which will signal its presence by calling this function with a specific
+    // struct name, return our inner state to it disguised as a usize. The
+    // visitor will interpret the usize as a pointer and use it to clone our
+    // state, allowing us to "deserialize a Json as a Json" without actually
+    // doing any deserialization (which'd destroy numeric values)
+    fn visit_unit_struct<V: de::Visitor>(&mut self, name: &'static str, mut v: V) -> Result<V::Value, Error> {
+        if name == EVIL_SENTINEL {
+            match self.current {
+                Some(_) => { v.visit_usize(&mut self.current as *mut _ as usize) }
+                None => { return Err(de::Error::end_of_stream()); }
+            }
+        } else {
+            self.visit(v)
+        }
     }
 }
 
@@ -293,12 +401,18 @@ pub fn into_deserialize<T: de::Deserialize>(json: Json) -> Result<T, Error> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use Json;
 
     macro_rules! roundtrip_success(
         ($t:ty, $e:expr) => ({
             let obj = $e;
             match super::from_serialize(&obj) {
                 Ok(val) => {
+                    // "Deserialize" as Json
+                    let alt_json: Result<Json, _> = val.clone().into_deserialize();
+                    assert!(alt_json.is_ok());
+                    assert_eq!(alt_json.unwrap(), val);
+                    // Deserialize as object
                     let res: Result<$t, _> = val.into_deserialize();
                     assert!(res.is_ok());
                     assert_eq!(res.unwrap(), obj);
@@ -346,6 +460,61 @@ mod tests {
         map.insert("Test".to_owned(), "Testval".to_owned());
         map.insert("Test2".to_owned(), "another".to_owned());
         roundtrip_success!(HashMap<String, String>, map);
+    }
+
+    macro_rules! deserialize_test(
+        ($e:expr, $result:expr) => ({
+            use serde::de;
+            let mut d = $e.into_deserializer();
+            let json: Result<Json, _>  = de::Deserialize::deserialize(&mut d);
+            assert!(json.is_ok());
+            assert_eq!(json.unwrap().to_bytes(), $result);
+        })
+    );
+
+    #[test]
+    fn serde_deserialize() {
+        use serde::de::value::ValueDeserializer;
+
+        macro_rules! check_num(
+           ($t:ident) => ({
+               use std::$t;
+               let mut val: $t;
+
+               val = 0;
+               deserialize_test!(val, format!("{}", val).as_bytes());
+               val = 100;
+               deserialize_test!(val, format!("{}", val).as_bytes());
+               val = $t::MIN;
+               deserialize_test!(val, format!("{}", val).as_bytes());
+               val = $t::MAX;
+               deserialize_test!(val, format!("{}", val).as_bytes());
+           })
+        );
+
+        check_num!(u8);
+        check_num!(u16);
+        check_num!(u32);
+        check_num!(u64);
+        check_num!(usize);
+        check_num!(i8);
+        check_num!(i16);
+        check_num!(i32);
+        check_num!(i64);
+        check_num!(isize);
+
+        deserialize_test!(0.375f32, b"0.375");
+        deserialize_test!(0.375f64, b"0.375");
+        deserialize_test!("Test1".to_string(), b"\"Test1\"");
+        deserialize_test!((), b"null");
+        deserialize_test!(true, b"true");
+        deserialize_test!(false, b"false");
+
+        deserialize_test!(vec![true, false, true, true], b"[true, false, true, true]");
+        let mut map = HashMap::new();
+        map.insert("Test".to_owned(), "Testval".to_owned());
+        map.insert("Test2".to_owned(), "another".to_owned());
+        deserialize_test!(map, "{\"Test\": \"Testval\", \"Test2\": \"another\"}".as_bytes());
     }
 }
 

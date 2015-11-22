@@ -89,6 +89,18 @@ impl Json {
     /// Returns the value, if this is an object
     pub fn object(&self) -> Option<&[(String, Json)]> { if let JsonInner::Object(ref x) = self.0 { Some(&x[..]) } else { None } }
 
+    /// Obtain a reference to a specified member, if this is an object
+    pub fn get(&self, index: &str) -> Option<&Json> {
+        if let JsonInner::Object(ref v) = self.0 {
+            for &(ref key, ref obj) in v {
+                if key == index {
+                    return Some(obj);
+                }
+            }
+        }
+        None
+    }
+
     /// Return the number of subobjects this object represents
     /// (so a count for Arrays and Objects). NOT a string length.
     pub fn len(&self) -> usize {
@@ -170,6 +182,12 @@ format_from_impl!(f32);
 impl From<String> for Json {
     fn from(s: String) -> Json {
         Json(JsonInner::String(s))
+    }
+}
+
+impl<'a> From<&'a str> for Json {
+    fn from(s: &'a str) -> Json {
+        Json(JsonInner::String(s.to_owned()))
     }
 }
 
