@@ -109,6 +109,44 @@ impl de::Deserialize for Json {
     }
 }
 
+impl ser::Serialize for Json {
+    fn serialize<S: ser::Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+        // If we are dealing with our own Serializer, we know the output will
+        // be Json, so we pass our self-pointer to the serializer to just be
+        // cloned. The motivation for this hack is as above in the `Deserialize`
+        // impl.
+        if <S as ser::Serializer>::format() == "strason" {
+            s.visit_unit_variant(EVIL_SENTINEL, self as *const _ as usize, "")
+        // After the mess, honest serialization code. Note that this will
+        // serialize numbers as strings
+        } else {
+            match self.0 {
+                JsonInner::Null => s.visit_unit(),
+                JsonInner::Bool(b) => s.visit_bool(b),
+                JsonInner::Number(ref st) => s.visit_str(st),
+                JsonInner::String(ref st) => s.visit_str(st),
+                JsonInner::Array(ref arr) => arr.serialize(s),
+                JsonInner::Object(ref arr) => {
+                    struct MapVisitor<'a>(&'a [(String, Json)]);
+                    impl<'a> ser::MapVisitor for MapVisitor<'a> {
+                        fn visit<S: ser::Serializer>(&mut self, s: &mut S) -> Result<Option<()>, S::Error> {
+                            if self.len() == Some(0) {
+                                Ok(None)
+                            } else {
+                                let (ref key, ref val) = self.0[0];
+                                self.0 = &self.0[1..];
+                                s.visit_map_elt(key, val).map(Some)
+                            }
+                        }
+                        fn len(&self) -> Option<usize> { Some(self.0.len()) }
+                    }
+
+                    s.visit_map(MapVisitor(arr))
+                }
+            }
+        }
+    }
+}
 
 /// A "Json to whatever" deserializer
 pub struct Deserializer {
@@ -383,6 +421,24 @@ impl ser::Serializer for Serializer {
         };
         Ok(())
     }
+
+    fn format() -> &'static str { "strason" }
+
+    // Special case if we are serializing a Json, it will signal this to
+    // us by passing a sentinel value as the field name in `visit_uint_variant`,
+    // and give us a pointer to itself disguised as a usize in the `index`
+    // field. We unwrap this and "serialize" it by just cloning it.
+    fn visit_unit_variant(&mut self, name: &'static str, index: usize, _: &'static str) -> Result<(), Error> {
+        if name == EVIL_SENTINEL {
+            unsafe {
+                let ptr = index as *const Json;
+                self.state.push(State::Value((*ptr).clone()));
+            }
+            Ok(())
+        } else {
+            self.visit_unit()
+        }
+    }
 }
 
 /// Convert an arbitrary object to a Json structure
@@ -408,10 +464,15 @@ mod tests {
             let obj = $e;
             match super::from_serialize(&obj) {
                 Ok(val) => {
+                    use serde::ser::Serialize;
                     // "Deserialize" as Json
                     let alt_json: Result<Json, _> = val.clone().into_deserialize();
                     assert!(alt_json.is_ok());
                     assert_eq!(alt_json.unwrap(), val);
+                    // "Serialize" as Json
+                    let mut s = super::Serializer::new();
+                    assert!(val.serialize(&mut s).is_ok());
+                    assert_eq!(s.unwrap(), val);
                     // Deserialize as object
                     let res: Result<$t, _> = val.into_deserialize();
                     assert!(res.is_ok());
@@ -465,10 +526,13 @@ mod tests {
     macro_rules! deserialize_test(
         ($e:expr, $result:expr) => ({
             use serde::de;
+            use std::str;
             let mut d = $e.into_deserializer();
             let json: Result<Json, _>  = de::Deserialize::deserialize(&mut d);
             assert!(json.is_ok());
-            assert_eq!(json.unwrap().to_bytes(), $result);
+            let json_vec = json.unwrap().to_bytes();
+            let json_str = str::from_utf8(&json_vec[..]).unwrap();
+            assert_eq!(json_str, $result);
         })
     );
 
@@ -482,13 +546,13 @@ mod tests {
                let mut val: $t;
 
                val = 0;
-               deserialize_test!(val, format!("{}", val).as_bytes());
+               deserialize_test!(val, format!("{}", val));
                val = 100;
-               deserialize_test!(val, format!("{}", val).as_bytes());
+               deserialize_test!(val, format!("{}", val));
                val = $t::MIN;
-               deserialize_test!(val, format!("{}", val).as_bytes());
+               deserialize_test!(val, format!("{}", val));
                val = $t::MAX;
-               deserialize_test!(val, format!("{}", val).as_bytes());
+               deserialize_test!(val, format!("{}", val));
            })
         );
 
@@ -503,19 +567,36 @@ mod tests {
         check_num!(i64);
         check_num!(isize);
 
-        deserialize_test!(0.375f32, b"0.375");
-        deserialize_test!(0.375f64, b"0.375");
-        deserialize_test!("Test1".to_string(), b"\"Test1\"");
-        deserialize_test!((), b"null");
-        deserialize_test!(true, b"true");
-        deserialize_test!(false, b"false");
+        deserialize_test!(0.375f32, "0.375");
+        deserialize_test!(0.375f64, "0.375");
+        deserialize_test!("Test1".to_string(), "\"Test1\"");
+        deserialize_test!((), "null");
+        deserialize_test!(true, "true");
+        deserialize_test!(false, "false");
 
-        deserialize_test!(vec![true, false, true, true], b"[true, false, true, true]");
+        deserialize_test!(vec![true, false, true, true], "[true, false, true, true]");
+        // TODO the ordering that HashMap gives us is unpredictable so we can't directly
+        // test multiple values
         let mut map = HashMap::new();
         map.insert("Test".to_owned(), "Testval".to_owned());
-        map.insert("Test2".to_owned(), "another".to_owned());
-        deserialize_test!(map, "{\"Test\": \"Testval\", \"Test2\": \"another\"}".as_bytes());
+        deserialize_test!(map, "{\"Test\": \"Testval\"}");
+    }
+
+    macro_rules! serialize_test(
+        ($s:expr) => ({
+            use serde_json;
+            assert_eq!(serde_json::to_string(&Json::from_str($s).unwrap()).unwrap(), $s);
+        })
+    );
+
+    #[test]
+    fn serde_serialize() {
+        serialize_test!("null");
+        serialize_test!("true");
+        serialize_test!("false");
+        serialize_test!("\"test string\"");
+        serialize_test!("[true,false,false,\"thing\"]");
+        serialize_test!("{\"obj\":\"val\",\"obj2\":\"val2\"}");
     }
 }
-
 

@@ -12,3 +12,6 @@ description = "Json parser that preserves field ordering and stores numbers as s
 encoding = "0.2"
 serde = "0.6"
 
+[dev-dependencies]
+serde_json = "0.6"
+

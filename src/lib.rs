@@ -29,6 +29,7 @@
 
 extern crate encoding;
 extern crate serde;
+#[cfg(test)] extern crate serde_json;
 
 use std::{io, ops};
 
