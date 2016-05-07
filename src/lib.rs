@@ -32,7 +32,7 @@ extern crate serde;
 #[cfg(test)] extern crate serde_json;
 
 use serde::ser;
-use std::{io, ops};
+use std::{fmt, io, ops};
 
 pub mod parser;
 pub mod serializer;
@@ -207,6 +207,40 @@ impl From<Vec<Json>> for Json {
 impl From<Vec<(String, Json)>> for Json {
     fn from(v: Vec<(String, Json)>) -> Json {
         Json(JsonInner::Object(v))
+    }
+}
+
+impl fmt::Display for Json {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use std::fmt::Write;
+
+        match self.0 {
+            JsonInner::Null => f.write_str("null"),
+            JsonInner::Bool(false) => f.write_str("false"),
+            JsonInner::Bool(true) => f.write_str("true"),
+            JsonInner::Number(ref nstr) => f.write_str(&nstr),
+            JsonInner::String(ref sstr) => write!(f, "\"{}\"", sstr),
+            JsonInner::Array(ref v) => {
+                try!(f.write_char('['));
+                if v.len() > 0 {
+                    try!(write!(f, " {}", v[0]));
+                }
+                for elem in v.iter().skip(1) {
+                    try!(write!(f, ", {}", elem));
+                }
+                f.write_str(" ]")
+            }
+            JsonInner::Object(ref v) => {
+                try!(f.write_char('{'));
+                if v.len() > 0 {
+                    try!(write!(f, " \"{}\": {}", v[0].0, v[0].1));
+                }
+                for elem in v.iter().skip(1) {
+                    try!(write!(f, ", \"{}\": {}", elem.0, elem.1));
+                }
+                f.write_str(" }")
+            }
+        }
     }
 }
 
@@ -405,6 +439,25 @@ mod tests {
         assert_eq!(Json::from_str("null").unwrap(), From::from(()));
 
         assert_eq!(Json::from_str("[]").unwrap(), From::from(Json::from_str("[]").unwrap()));
+    }
+
+    #[test]
+    fn format() {
+        macro_rules! format_roundtrip (
+            ($s:expr) => (
+                assert_eq!(format!("{}", Json::from_str($s).unwrap()), $s);
+            )
+        );
+        format_roundtrip!("null");
+        format_roundtrip!("true");
+        format_roundtrip!("false");
+        format_roundtrip!("[ ]");
+        format_roundtrip!("{ }");
+        format_roundtrip!("[ true, false, true, true ]");
+        format_roundtrip!("0");
+        format_roundtrip!("1000");
+        format_roundtrip!("\"Andrew\"");
+        format_roundtrip!("{ \"Andrew\": 10, \"Jonas\": 100 }");
     }
 }
 

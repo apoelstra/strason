@@ -1,6 +1,6 @@
 [package]
 name = "strason"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Andrew Poelstra <apoelstra@wpsoftware.net>"]
 license = "CC0-1.0"
 homepage = "https://github.com/apoelstra/strason/"
