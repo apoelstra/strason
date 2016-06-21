@@ -196,7 +196,7 @@ impl de::Deserializer for Deserializer {
        match self.current {
            Some(Json(JsonInner::Null)) => v.visit_none(),
            Some(_) => v.visit_some(self),
-           None => { return Err(de::Error::end_of_stream()); }
+           None => Err(de::Error::end_of_stream())
        }
     }
 
@@ -212,7 +212,7 @@ impl de::Deserializer for Deserializer {
         if name == EVIL_SENTINEL {
             match self.current {
                 Some(_) => { v.visit_usize(&mut self.current as *mut _ as usize) }
-                None => { return Err(de::Error::end_of_stream()); }
+                None => { Err(de::Error::end_of_stream()) }
             }
         } else {
             self.visit(v)
@@ -299,6 +299,7 @@ enum State {
 }
 
 /// A "whatever to Json" serializer
+#[derive(Default)]
 pub struct Serializer {
     // stack-based state machine stack
     state: Vec<State>

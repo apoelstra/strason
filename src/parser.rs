@@ -288,7 +288,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
             self.eat();
         }
         if state == State::Start {
-            return Err(ErrorType::MalformedNumber);
+            Err(ErrorType::MalformedNumber)
         } else {
             Ok(ret)
         }

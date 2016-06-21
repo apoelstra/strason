@@ -27,6 +27,9 @@
 #![deny(unused_mut)]
 #![warn(missing_docs)]
 
+// Clippy whitelist
+#![cfg_attr(feature = "clippy", allow(match_same_arms))]  // many false positives
+
 extern crate encoding;
 extern crate serde;
 #[cfg(test)] extern crate serde_json;
@@ -70,7 +73,7 @@ impl Json {
 
     /// Construct a Json object by parsing a string
     pub fn from_str(s: &str) -> Result<Json, parser::Error> {
-        Json::from_iter(s.bytes().map(|u| Ok(u)))
+        Json::from_iter(s.bytes().map(Ok))
     }
 
     /// Construct a Json object from a reader
@@ -218,11 +221,11 @@ impl fmt::Display for Json {
             JsonInner::Null => f.write_str("null"),
             JsonInner::Bool(false) => f.write_str("false"),
             JsonInner::Bool(true) => f.write_str("true"),
-            JsonInner::Number(ref nstr) => f.write_str(&nstr),
+            JsonInner::Number(ref nstr) => f.write_str(nstr),
             JsonInner::String(ref sstr) => write!(f, "\"{}\"", sstr),
             JsonInner::Array(ref v) => {
                 try!(f.write_char('['));
-                if v.len() > 0 {
+                if !v.is_empty() {
                     try!(write!(f, " {}", v[0]));
                 }
                 for elem in v.iter().skip(1) {
@@ -232,7 +235,7 @@ impl fmt::Display for Json {
             }
             JsonInner::Object(ref v) => {
                 try!(f.write_char('{'));
-                if v.len() > 0 {
+                if !v.is_empty() {
                     try!(write!(f, " \"{}\": {}", v[0].0, v[0].1));
                 }
                 for elem in v.iter().skip(1) {
