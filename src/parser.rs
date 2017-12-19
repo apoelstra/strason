@@ -15,8 +15,8 @@
 //! # Parsing support
 //!
 
-use encoding::{Encoding, DecoderTrap};
-use encoding::all::UTF_16BE;
+#[cfg(feature = "utf16")] use encoding::{Encoding, DecoderTrap};
+#[cfg(feature = "utf16")] use encoding::all::UTF_16BE;
 use std::{error, fmt, io, num};
 use std::borrow::Cow;
 use serde::de;
@@ -336,6 +336,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                                 b't' => b'\t',
                                 b'/' => b'/',
                                 b'\\' => unreachable!(),  // covered above in the main b'\\' branch
+#[cfg(feature = "utf16")]
                                 b'u' => {
                                     // Read as many \uXXXX's in a row as we can, then parse them all as
                                     // UTF16, according to ECMA 404 p10
@@ -508,9 +509,6 @@ mod tests {
         assert_eq!(Json::from_str("\"\\\"\"").unwrap(), jstr!("\""));
         assert_eq!(Json::from_str(" \"string\"").unwrap(), jstr!("string"));
         assert_eq!(Json::from_str("\"i've \\\"ed this\"").unwrap(), jstr!("i've \"ed this"));
-        assert_eq!(Json::from_str(" \"\\u0020\"").unwrap(), jstr!(" "));
-        assert_eq!(Json::from_str(" \"\\uffff\\t\"").unwrap(), jstr!("\u{ffff}\t"));
-        assert_eq!(Json::from_str(" \"\\ud834\\uDD1E\"").unwrap(), jstr!("\u{1d11e}"));
 
         assert_eq!(Json::from_str(" 0").unwrap(), jnum!("0"));
         assert_eq!(Json::from_str("-0").unwrap(), jnum!("-0"));
@@ -528,11 +526,6 @@ mod tests {
         assert!(Json::from_str("gibberish").is_err());
         assert!(Json::from_str("\"\\c\"").is_err());
         assert!(Json::from_str("\"\\u\"").is_err());
-        assert!(Json::from_str("\"\\u123\"").is_err());
-        assert!(Json::from_str("\"\\ud800\"").is_err());
-        assert!(Json::from_str("\"\\udd1e\\ud834\"").is_err());
-        assert!(Json::from_str("\"\\uf+ff\"").is_err());
-        assert!(Json::from_str("\"").is_err());
         assert!(Json::from_str("\"\\").is_err());
         assert!(Json::from_str(".5").is_err());
         assert!(Json::from_str("9.5.5").is_err());
@@ -546,6 +539,19 @@ mod tests {
         assert!(Json::from_str("00").is_err());
         assert!(Json::from_str("2-3").is_err());
         assert!(Json::from_str("2+3").is_err());
+    }
+
+    #[cfg(feature = "utf16")]
+    #[test]
+    fn test_utf16() {
+        assert!(Json::from_str("\"\\u123\"").is_err());
+        assert!(Json::from_str("\"\\ud800\"").is_err());
+        assert!(Json::from_str("\"\\udd1e\\ud834\"").is_err());
+        assert!(Json::from_str("\"\\uf+ff\"").is_err());
+        assert!(Json::from_str("\"").is_err());
+        assert_eq!(Json::from_str(" \"\\u0020\"").unwrap(), jstr!(" "));
+        assert_eq!(Json::from_str(" \"\\uffff\\t\"").unwrap(), jstr!("\u{ffff}\t"));
+        assert_eq!(Json::from_str(" \"\\ud834\\uDD1E\"").unwrap(), jstr!("\u{1d11e}"));
     }
 
     #[test]

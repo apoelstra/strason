@@ -15,15 +15,14 @@
 //! # Serialization support
 //!
 
-use encoding::{Encoding, EncoderTrap};
-use encoding::all::UTF_16BE;
+#[cfg(feature = "utf16")] use encoding::{Encoding, EncoderTrap};
+#[cfg(feature = "utf16")] use encoding::all::UTF_16BE;
+#[cfg(feature = "utf16")] use std::io::Write;
 use std::{io, str};
-use std::io::Write;
 
 use {Json, JsonInner};
 
 fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
-// TODO utf16
     try!(w.write(b"\""));
     for ch in s.chars() {
         match ch {
@@ -35,6 +34,7 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
             '\\' => { try!(w.write(b"\\\\")); }
             '"' => { try!(w.write(b"\\\"")); }
             '\x20'...'\x7e' => { try!(w.write(&[ch as u8])); }
+#[cfg(feature = "utf16")]
             _ => {
                 let mut ch_bytes = [0u8; 4];
                 write!(&mut ch_bytes[..], "{}", ch).unwrap();
@@ -50,6 +50,8 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
                     try!(write!(w, "\\u{:02x}{:02x}", unicode[2], unicode[3]));
                 }
             }
+#[cfg(not(feature = "utf16"))]
+            _ => { return Err(io::Error::new(io::ErrorKind::InvalidInput, "strason compiled without UCS-2 support")); }
         }
     }
     try!(w.write(b"\""));
@@ -168,9 +170,6 @@ mod tests {
         assert!(round_trip("\"     \\t\\n\\t     \""));
         assert!(round_trip("\"\\\"\""));
 
-        assert!(round_trip("\"\\u0000\""));
-        assert!(round_trip("\"\\ucafe\\ubabe\""));
-        assert!(round_trip("\"\\ud834\\udd1e\""));
         assert!(round_trip("\"\\n\\r\\f\\b\\\\\""));
 
         assert!(round_trip("-0"));
@@ -183,6 +182,14 @@ mod tests {
 
         assert!(round_trip("[1, 2, 3, true, null, false, [ 10, 20, 30 ]     ]"));
         assert!(round_trip("{ \"key\": \"val\", \"true\": [] }"));
+    }
+
+    #[cfg(feature = "utf16")]
+    #[test]
+    fn test_round_trip_utf16() {
+        assert!(round_trip("\"\\u0000\""));
+        assert!(round_trip("\"\\ucafe\\ubabe\""));
+        assert!(round_trip("\"\\ud834\\udd1e\""));
     }
 }
 
