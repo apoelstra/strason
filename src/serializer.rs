@@ -15,9 +15,6 @@
 //! # Serialization support
 //!
 
-#[cfg(feature = "utf16")] use encoding::{Encoding, EncoderTrap};
-#[cfg(feature = "utf16")] use encoding::all::UTF_16BE;
-#[cfg(feature = "utf16")] use std::io::Write;
 use std::{io, str};
 
 use {Json, JsonInner};
@@ -34,24 +31,13 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
             '\\' => { try!(w.write(b"\\\\")); }
             '"' => { try!(w.write(b"\\\"")); }
             '\x20'...'\x7e' => { try!(w.write(&[ch as u8])); }
-#[cfg(feature = "utf16")]
             _ => {
-                let mut ch_bytes = [0u8; 4];
-                write!(&mut ch_bytes[..], "{}", ch).unwrap();
-                // Unsafety as we are doing unchecked UTF8 conversion. This is safe
-                // because we obtained this data by UTF8-encoding a char literally 
-                // one line previous.
-                let ch_str = unsafe { str::from_utf8_unchecked(&ch_bytes[..]) };
-                let unicode = try!(UTF_16BE.encode(&ch_str[..ch.len_utf8()], EncoderTrap::Strict).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "unencodable utf16")));
-                assert!(unicode.len() == 2 || unicode.len() == 4);
-
-                try!(write!(w, "\\u{:02x}{:02x}", unicode[0], unicode[1]));
-                if unicode.len() == 4 {
-                    try!(write!(w, "\\u{:02x}{:02x}", unicode[2], unicode[3]));
+                let mut utf16 = [0u16; 2];
+                let subslice = ch.encode_utf16(&mut utf16);
+                for word in subslice.iter().cloned() {
+                    try!(write!(w, "\\u{:02x}{:02x}", word >> 8 as u8, word as u8));
                 }
             }
-#[cfg(not(feature = "utf16"))]
-            _ => { return Err(io::Error::new(io::ErrorKind::InvalidInput, "strason compiled without UCS-2 support")); }
         }
     }
     try!(w.write(b"\""));
@@ -184,7 +170,6 @@ mod tests {
         assert!(round_trip("{ \"key\": \"val\", \"true\": [] }"));
     }
 
-    #[cfg(feature = "utf16")]
     #[test]
     fn test_round_trip_utf16() {
         assert!(round_trip("\"\\u0000\""));

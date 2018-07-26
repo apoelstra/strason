@@ -15,10 +15,7 @@
 //! # Parsing support
 //!
 
-#[cfg(feature = "utf16")] use encoding::{Encoding, DecoderTrap};
-#[cfg(feature = "utf16")] use encoding::all::UTF_16BE;
-use std::{error, fmt, io, num};
-use std::borrow::Cow;
+use std::{error, char, fmt, io, num};
 use serde::de;
 use serde::iter::LineColIterator;
 
@@ -47,18 +44,14 @@ pub enum ErrorType {
     UnknownIdent,
     /// a unicode codepoint constant was malformed
     Unicode(num::ParseIntError),
-    /// a series of codepoints could not be parsed as utf16
-    Utf16(Cow<'static, str>),
+    /// UTF-16 sequence with unpaired surrogate
+    UnpairedSurrogate,
     /// some sort of IO error
     Io(io::Error)
 }
 
 impl From<num::ParseIntError> for ErrorType {
     fn from(e: num::ParseIntError) -> ErrorType { ErrorType::Unicode(e) }
-}
-
-impl From<Cow<'static, str>> for ErrorType {
-    fn from(e: Cow<'static, str>) -> ErrorType { ErrorType::Utf16(e) }
 }
 
 impl From<io::Error> for ErrorType {
@@ -105,7 +98,6 @@ impl fmt::Display for Error {
             ErrorType::UnexpectedCharacter(c) => write!(f, "{}:{}: unexpected character {}", self.line, self.col, c),
             ErrorType::Io(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
             ErrorType::Unicode(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
-            ErrorType::Utf16(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
             ErrorType::MissingField(ref s) => write!(f, "missing field `{}`", s),
             ErrorType::UnknownField(ref s) => write!(f, "unknown field `{}`", s),
             ErrorType::Syntax(ref s) => write!(f, "syntax error: {}", s),
@@ -132,7 +124,7 @@ impl error::Error for Error {
             ErrorType::MalformedNumber => "malformed number",
             ErrorType::UnknownIdent => "unknown ident",
             ErrorType::Unicode(ref e) => error::Error::description(e),
-            ErrorType::Utf16(ref e) => e,
+            ErrorType::UnpairedSurrogate => "UTF-16 unpaired surrogate",
             ErrorType::Io(ref e) => error::Error::description(e),
             ErrorType::MissingField(_) => "missing field",
             ErrorType::UnknownField(_) => "unknown field",
@@ -336,22 +328,19 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                                 b't' => b'\t',
                                 b'/' => b'/',
                                 b'\\' => unreachable!(),  // covered above in the main b'\\' branch
-#[cfg(feature = "utf16")]
                                 b'u' => {
                                     // Read as many \uXXXX's in a row as we can, then parse them all as
                                     // UTF16, according to ECMA 404 p10
-                                    let mut utf16_be: Vec<u8> = vec![];
+                                    let mut utf16_be: Vec<u16> = vec![];
                                     loop {
                                         // Parse codepoint
                                         self.eat();
                                         let mut num_str = String::new();
                                         num_str.push(try!(self.peek_noeof()) as char); self.eat();
                                         num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        utf16_be.push(try!(u8::from_str_radix(&num_str[..], 16)));
-                                        num_str = String::new();
                                         num_str.push(try!(self.peek_noeof()) as char); self.eat();
                                         num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        utf16_be.push(try!(u8::from_str_radix(&num_str[..], 16)));
+                                        utf16_be.push(try!(u16::from_str_radix(&num_str[..], 16)));
                                         // Check if another codepoint follows
                                         if try!(self.peek()) == Some(b'\\') {
                                             self.eat();
@@ -365,8 +354,12 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                                         }
                                     }
 
-                                    let s = try!(UTF_16BE.decode(&utf16_be[..], DecoderTrap::Strict));
-                                    ret.push_str(&s[..]);
+                                    for ch in char::decode_utf16(utf16_be.iter().cloned()) {
+                                        match ch {
+                                            Ok(ch) => ret.push(ch),
+                                            Err(_) => return Err(ErrorType::UnpairedSurrogate)
+                                        }
+                                    }
                                     continue;
                                 }
                                 _ => { return Err(ErrorType::MalformedEscape); }
@@ -541,12 +534,14 @@ mod tests {
         assert!(Json::from_str("2+3").is_err());
     }
 
-    #[cfg(feature = "utf16")]
     #[test]
     fn test_utf16() {
         assert!(Json::from_str("\"\\u123\"").is_err());
-        assert!(Json::from_str("\"\\ud800\"").is_err());
-        assert!(Json::from_str("\"\\udd1e\\ud834\"").is_err());
+        // Following two tests are invalid UCS-2 but valid UTF-16. We do the wrong thing
+        // here (by accepting them) in order to stick with only stdlib functions, since
+        // the alternative is to add dependencies on very heavy string-parsing machinery.
+        //assert!(Json::from_str("\"\\ud800\"").is_err());
+        //assert!(Json::from_str("\"\\udd1e\\ud834\"").is_err());
         assert!(Json::from_str("\"\\uf+ff\"").is_err());
         assert!(Json::from_str("\"").is_err());
         assert_eq!(Json::from_str(" \"\\u0020\"").unwrap(), jstr!(" "));

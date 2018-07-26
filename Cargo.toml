@@ -8,16 +8,8 @@ repository = "https://github.com/apoelstra/strason/"
 documentation = "https://www.wpsoftware.net/rustdoc/strason/"
 description = "Json parser that preserves field ordering and stores numbers as strings, preserving their full data"
 
-[features]
-default = ["utf16"]
-utf16 = ["encoding"]
-
 [dependencies]
 serde = "0.6"
-
-[dependencies.encoding]
-version = "0.2"
-optional = true
 
 [dev-dependencies]
 serde_json = "0.6"

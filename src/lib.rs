@@ -30,7 +30,6 @@
 // Clippy whitelist
 #![cfg_attr(feature = "clippy", allow(match_same_arms))]  // many false positives
 
-#[cfg(feature = "utf16")] extern crate encoding;
 extern crate serde;
 #[cfg(test)] extern crate serde_json;
 
