@@ -122,25 +122,6 @@ impl error::Error for Error {
     }
 }
 
-impl ::serde::de::Error for Error {
-    fn syntax(s: &str) -> Error {
-        Error { line: 0, col: 0, error: ErrorType::Other(s.to_owned()) }
-    }
-
-    fn end_of_stream() -> Error {
-        Error { line: 0, col: 0, error: ErrorType::UnexpectedEOF }
-    }
-
-    fn unknown_field(s: &str) -> Error {
-        Error { line: 0, col: 0, error: ErrorType::UnknownField(s.to_owned()) }
-    }
-
-    fn missing_field(s: &'static str) -> Error {
-        Error { line: 0, col: 0, error: ErrorType::MissingField(s) }
-    }
-}
-
-
 /// A structure capable of parsing binary ASCII data into a "JSON object",
 /// which is simply a tree of strings. Further parsing should be done by
 /// other layers.
@@ -402,13 +383,13 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
     }
 
     /// Consume the internal iterator and produce a Json object
-    pub fn parse(&mut self) -> Result<Json, Error> {
+    pub fn parse(&mut self) -> Result<Json, super::Error> {
         self.eat_whitespace()?;
 
         let first_ch = match self.peek() {
             Ok(Some(c)) => c,
-            Ok(None) => return Err(self.error_at(ErrorType::UnexpectedEOF)),
-            Err(e) => return Err(e),
+            Ok(None) => return Err(From::from(self.error_at(ErrorType::UnexpectedEOF))),
+            Err(e) => return Err(From::from(e)),
         };
 
         match first_ch {
@@ -446,7 +427,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                     match self.peek_noeof()? {
                         b',' => { self.eat(); }
                         b']' => { self.eat(); break; }
-                        _ => { return Err(self.error_at(ErrorType::UnknownIdent)); }
+                        _ => { return Err(From::from(self.error_at(ErrorType::UnknownIdent))); }
                     }
                 }
                 Ok(Json(JsonInner::Array(ret)))
@@ -471,7 +452,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                         self.eat();
                         self.eat_whitespace()?;
                     } else {
-                        return Err(self.error_at(ErrorType::UnexpectedCharacter(sep_ch as char)));
+                        return Err(From::from(self.error_at(ErrorType::UnexpectedCharacter(sep_ch as char))));
                     }
                     // parse value
                     let val = self.parse()?;
@@ -481,12 +462,12 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                     match self.peek_noeof()? {
                         b',' => { self.eat(); },
                         b'}' /* { */ => { self.eat(); break; }
-                        x => { return Err(self.error_at(ErrorType::UnexpectedCharacter(x as char))); }
+                        x => { return Err(From::from(self.error_at(ErrorType::UnexpectedCharacter(x as char)))); }
                     }
                 }
                 Ok(Json(JsonInner::Object(ret)))
             }
-            _ => Err(self.error_at(ErrorType::UnknownIdent))
+            _ => Err(From::from(self.error_at(ErrorType::UnknownIdent)))
         }
     }
 }
@@ -494,6 +475,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
 #[cfg(test)]
 mod tests {
     use {Json, JsonInner};
+    use {Error, ErrorInner};
 
     macro_rules! jnull( () => (Json(JsonInner::Null)) );
     macro_rules! jbool( ($e:expr) => (Json(JsonInner::Bool($e))) );
@@ -621,10 +603,13 @@ mod tests {
 
     #[test]
     fn test_error() {
-        let e = Json::from_str("10+5").unwrap_err();
-        assert_eq!(e.line, 1);
-        assert_eq!(e.col, 3);
-        assert_eq!(e.to_string(), "1:3: unexpected character +");
+        if let Err(Error(ErrorInner::Parser(e))) = Json::from_str("10+5") {
+            assert_eq!(e.line, 1);
+            assert_eq!(e.col, 3);
+            assert_eq!(e.to_string(), "1:3: unexpected character +");
+        } else {
+            panic!("wrong error return type");
+        }
     }
 }
 

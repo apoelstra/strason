@@ -9,8 +9,8 @@ documentation = "https://www.wpsoftware.net/rustdoc/strason/"
 description = "Json parser that preserves field ordering and stores numbers as strings, preserving their full data"
 
 [dependencies]
-serde = "0.6"
+serde = "1.0"
 
 [dev-dependencies]
-serde_json = "0.6"
+serde_json = "1.0"
 
