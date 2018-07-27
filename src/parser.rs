@@ -16,8 +16,6 @@
 //!
 
 use std::{error, char, fmt, io, num};
-use serde::de;
-use serde::iter::LineColIterator;
 
 use {Json, JsonInner};
 
@@ -25,7 +23,7 @@ use {Json, JsonInner};
 #[derive(Debug)]
 pub enum ErrorType {
     /// Syntax error interpreting Json
-    Syntax(String),
+    Other(String),
     /// Missing field interpreting Json
     MissingField(&'static str),
     /// Unknown field
@@ -58,6 +56,19 @@ impl From<io::Error> for ErrorType {
     fn from(e: io::Error) -> ErrorType { ErrorType::Io(e) }
 }
 
+/// A macro which acts like try! but attaches line/column info to the error
+macro_rules! try_at(
+    ($s:expr, $e:expr) => (
+        match $e {
+            Ok(x) => x,
+            Err(e) => {
+                return Err($s.error_at(From::from(e)));
+            }
+        }
+    )
+);
+
+
 /// A Json parsing error
 #[derive(Debug)]
 pub struct Error {
@@ -66,31 +77,9 @@ pub struct Error {
     error: ErrorType
 }
 
-impl Error {
-    fn at<I: Iterator<Item=io::Result<u8>>>(iter: &LineColIterator<I>, ty: ErrorType) -> Error {
-        Error {
-            line: iter.line(),
-            col: iter.col(),
-            error: ty
-        }
-    }
-}
-
 impl From<ErrorType> for Error {
-    fn from(e: ErrorType) -> Error { Error { line: 0, col: 0, error: e } }
+    fn from(e: ErrorType) -> Error { Error { line: 1, col: 1, error: e } }
 }
-
-/// A macro which acts like try! but attaches line/column info to the error
-macro_rules! try_at(
-    ($s:expr, $e:expr) => (
-        match $e {
-            Ok(x) => x,
-            Err(e) => {
-                return Err(Error::at(&$s.iter, e));
-            }
-        }
-    )
-);
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -100,7 +89,7 @@ impl fmt::Display for Error {
             ErrorType::Unicode(ref e) => write!(f, "{}:{}: {}", self.line, self.col, e),
             ErrorType::MissingField(ref s) => write!(f, "missing field `{}`", s),
             ErrorType::UnknownField(ref s) => write!(f, "unknown field `{}`", s),
-            ErrorType::Syntax(ref s) => write!(f, "syntax error: {}", s),
+            ErrorType::Other(ref s) => write!(f, "syntax error: {}", s),
             _ => write!(f, "{}:{}: {}", self.line, self.col, error::Error::description(self))
         }
     }
@@ -128,14 +117,14 @@ impl error::Error for Error {
             ErrorType::Io(ref e) => error::Error::description(e),
             ErrorType::MissingField(_) => "missing field",
             ErrorType::UnknownField(_) => "unknown field",
-            ErrorType::Syntax(_) => "syntax error"
+            ErrorType::Other(_) => "syntax/other error",
         }
     }
 }
 
-impl de::Error for Error {
+impl ::serde::de::Error for Error {
     fn syntax(s: &str) -> Error {
-        Error { line: 0, col: 0, error: ErrorType::Syntax(s.to_owned()) }
+        Error { line: 0, col: 0, error: ErrorType::Other(s.to_owned()) }
     }
 
     fn end_of_stream() -> Error {
@@ -151,54 +140,86 @@ impl de::Error for Error {
     }
 }
 
+
 /// A structure capable of parsing binary ASCII data into a "JSON object",
 /// which is simply a tree of strings. Further parsing should be done by
 /// other layers.
 pub struct Parser<I: Iterator<Item=io::Result<u8>>> {
-    iter: LineColIterator<I>,
-    ch: Option<u8>
+    iter: I,
+    peek: Option<u8>,
+    line: usize,
+    col: usize
+}
+
+impl<I: Iterator<Item=io::Result<u8>>> Iterator for Parser<I>  {
+    type Item = io::Result<u8>;
+
+    fn next(&mut self) -> Option<io::Result<u8>> {
+        match self.peek.take() {
+            Some(ch) => Some(Ok(ch)),
+            None => {
+                match self.iter.next() {
+                    None => None,
+                    Some(Err(e)) => Some(Err(e)),
+                    Some(Ok(ch)) => {
+                        if ch == b'\n' {
+                            self.col = 0;
+                            self.line += 1;
+                        } else {
+                            self.col += 1;
+                        }
+                        self.peek = Some(ch);
+                        Some(Ok(ch))
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
     /// Construct a new parser, given a byte iterator as input
     pub fn new(iter: I) -> Parser<I> {
         Parser {
-            iter: LineColIterator::new(iter),
-            ch: None
+            iter: iter,
+            peek: None,
+            line: 1,
+            col: 0,
         }
     }
 
-    fn peek(&mut self) -> Result<Option<u8>, ErrorType> {
-        match self.ch {
-            Some(c) => Ok(Some(c)),
-            None => {
-                match self.iter.next() {
-                    Some(Ok(ch)) => {
-                        self.ch = Some(ch);
-                        Ok(self.ch)
-                    }
-                    Some(Err(e)) => {
-                        Err(ErrorType::Io(e))
-                    }
-                    None => Ok(None)
-                }
+    fn error_at(&self, ty: ErrorType) -> Error {
+        Error {
+            line: self.line,
+            col: self.col,
+            error: ty,
+        }
+    }
+
+    fn peek(&mut self) -> Result<Option<u8>, Error> {
+        match self.next() {
+            Some(Ok(ch)) => {
+                self.peek = Some(ch);
+                Ok(Some(ch))
             }
+            Some(Err(e)) => Err(self.error_at(ErrorType::Io(e))),
+            None => Ok(None),
         }
     }
 
-    fn peek_noeof(&mut self) -> Result<u8, ErrorType> {
+    fn peek_noeof(&mut self) -> Result<u8, Error> {
         match self.peek() {
             Ok(Some(c)) => Ok(c),
-            Ok(None) => Err(ErrorType::UnexpectedEOF),
+            Ok(None) => Err(self.error_at(ErrorType::UnexpectedEOF)),
             Err(e) => Err(e)
         }
     }
 
-    fn eat(&mut self) { self.ch = None; }
+    fn eat(&mut self) { self.peek = None; }
 
-    fn eat_whitespace(&mut self) -> Result<(), ErrorType> {
+    fn eat_whitespace(&mut self) -> Result<(), Error> {
         loop {
-            match try!(self.peek()) {
+            match self.peek()? {
                 Some(b' ') | Some(b'\n') | Some(b'\r') => {
                     self.eat();
                 }
@@ -207,37 +228,37 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
         }
     }
 
-    fn eat_ident(&mut self, ident: &'static str) -> Result<(), ErrorType> {
+    fn eat_ident(&mut self, ident: &'static str) -> Result<(), Error> {
         for c in ident.bytes() {
-            if try!(self.peek()) == Some(c) {
+            if self.peek()? == Some(c) {
                 self.eat();
             } else {
-                return Err(ErrorType::UnknownIdent);
+                return Err(self.error_at(ErrorType::UnknownIdent));
             }
         }
         Ok(())
     }
 
-    fn parse_number(&mut self) -> Result<String, ErrorType> {
+    fn parse_number(&mut self) -> Result<String, Error> {
         #[derive(PartialEq)]
         enum State { Start, ZeroStart, PreDecimal, PostDecimal, InExp, PastExp }
 
         let mut ret = String::new();
         let mut state = State::Start;
-        while let Some(c) = try!(self.peek()) {
+        while let Some(c) = self.peek()? {
             match c {
                 b'+' => {
                     if state == State::InExp {
                         state = State::PastExp;
                     } else {
-                        return Err(ErrorType::UnexpectedCharacter('+'));
+                        return Err(self.error_at(ErrorType::UnexpectedCharacter('+')));
                     }
                 }
                 b'-' => {
                     if state == State::InExp {
                         state = State::PastExp;
                     } else if state != State::Start {
-                        return Err(ErrorType::UnexpectedCharacter('-'));
+                        return Err(self.error_at(ErrorType::UnexpectedCharacter('-')));
                     }
                 }
                 b'0' ... b'9' => {
@@ -249,14 +270,14 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                         }
                     // Can't start a number with 0, except 0 itself and 0.xyz
                     } else if state == State::ZeroStart {
-                        return Err(ErrorType::MalformedNumber);
+                        return Err(self.error_at(ErrorType::MalformedNumber));
                     }
                 }
                 b'.' => {
                     if state == State::PreDecimal || state == State::ZeroStart {
                         state = State::PostDecimal;
                     } else {
-                        return Err(ErrorType::MalformedNumber);
+                        return Err(self.error_at(ErrorType::MalformedNumber));
                     }
                 }
                 b' ' | b'\r' | b'\n' | b'}' | b']' | b',' | b':' => {
@@ -269,31 +290,31 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                        state == State::PostDecimal {
                         state = State::InExp;
                     } else {
-                        return Err(ErrorType::MalformedNumber);
+                        return Err(self.error_at(ErrorType::MalformedNumber));
                     }
                 }
                 x => {
-                    return Err(ErrorType::UnexpectedCharacter(x as char));
+                    return Err(self.error_at(ErrorType::UnexpectedCharacter(x as char)));
                 }
             }
             ret.push(c as char);
             self.eat();
         }
         if state == State::Start {
-            Err(ErrorType::MalformedNumber)
+            Err(self.error_at(ErrorType::MalformedNumber))
         } else {
             Ok(ret)
         }
     }
 
     /// Consume a string, assuming the first character has been vetted to be '"'.
-    fn parse_string(&mut self) -> Result<String, ErrorType> {
+    fn parse_string(&mut self) -> Result<String, Error> {
         #[derive(PartialEq)]
         enum State { Start, Scanning, Escaping, Done }
 
         let mut ret = String::new();
         let mut state = State::Start;
-        while let Some(mut c) = try!(self.peek()) {
+        while let Some(mut c) = self.peek()? {
             match c {
                 b'"' => {
                     match state {
@@ -305,7 +326,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                 }
                 b'\\' => {
                     match state {
-                        State::Start => { return Err(ErrorType::ExpectedString); }
+                        State::Start => { return Err(self.error_at(ErrorType::ExpectedString)); }
                         State::Scanning => { state = State::Escaping; self.eat(); continue; }
                         State::Escaping => { state = State::Scanning; }
                         State::Done => unreachable!()
@@ -314,7 +335,7 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                 _ => {
                     match state {
                         State::Start => {
-                            return Err(ErrorType::ExpectedString);
+                            return Err(self.error_at(ErrorType::ExpectedString));
                         }
                         State::Scanning => {
                             // Do nothing -- after the match we will push this character onto the buffer
@@ -336,15 +357,15 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                                         // Parse codepoint
                                         self.eat();
                                         let mut num_str = String::new();
-                                        num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        num_str.push(try!(self.peek_noeof()) as char); self.eat();
-                                        utf16_be.push(try!(u16::from_str_radix(&num_str[..], 16)));
+                                        num_str.push(self.peek_noeof()? as char); self.eat();
+                                        num_str.push(self.peek_noeof()? as char); self.eat();
+                                        num_str.push(self.peek_noeof()? as char); self.eat();
+                                        num_str.push(self.peek_noeof()? as char); self.eat();
+                                        utf16_be.push(try_at!(self, u16::from_str_radix(&num_str[..], 16)));
                                         // Check if another codepoint follows
-                                        if try!(self.peek()) == Some(b'\\') {
+                                        if self.peek()? == Some(b'\\') {
                                             self.eat();
-                                            if try!(self.peek()) != Some(b'u') {
+                                            if self.peek()? != Some(b'u') {
                                                 state = State::Escaping;
                                                 break;
                                             }
@@ -357,12 +378,12 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                                     for ch in char::decode_utf16(utf16_be.iter().cloned()) {
                                         match ch {
                                             Ok(ch) => ret.push(ch),
-                                            Err(_) => return Err(ErrorType::UnpairedSurrogate)
+                                            Err(_) => return Err(self.error_at(ErrorType::UnpairedSurrogate))
                                         }
                                     }
                                     continue;
                                 }
-                                _ => { return Err(ErrorType::MalformedEscape); }
+                                _ => { return Err(self.error_at(ErrorType::MalformedEscape)); }
                             };
                             state = State::Scanning;
                         }
@@ -376,60 +397,56 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
         if state == State::Done {
             Ok(ret)
         } else {
-            Err(ErrorType::UnexpectedEOF)
+            Err(self.error_at(ErrorType::UnexpectedEOF))
         }
     }
 
     /// Consume the internal iterator and produce a Json object
     pub fn parse(&mut self) -> Result<Json, Error> {
-        try_at!(self, self.eat_whitespace());
+        self.eat_whitespace()?;
 
         let first_ch = match self.peek() {
             Ok(Some(c)) => c,
-            Ok(None) => {
-                return Err(Error::at(&self.iter, ErrorType::UnexpectedEOF));
-            },
-            Err(e) => {
-                return Err(Error::at(&self.iter, e));
-            }
+            Ok(None) => return Err(self.error_at(ErrorType::UnexpectedEOF)),
+            Err(e) => return Err(e),
         };
 
         match first_ch {
             // keywords
             b'n' => {
-                try_at!(self, self.eat_ident("null"));
+                self.eat_ident("null")?;
                 Ok(Json(JsonInner::Null))
             }
             b't' => {
-                try_at!(self, self.eat_ident("true"));
+                self.eat_ident("true")?;
                 Ok(Json(JsonInner::Bool(true)))
             }
             b'f' => {
-                try_at!(self, self.eat_ident("false"));
+                self.eat_ident("false")?;
                 Ok(Json(JsonInner::Bool(false)))
             }
             // numbers
             b'-' | b'0' ... b'9' => {
-                Ok(Json(JsonInner::Number(try_at!(self, self.parse_number()))))
+                Ok(Json(JsonInner::Number(self.parse_number()?)))
             }
             // strings
             b'"' | b'\'' => {
-                Ok(Json(JsonInner::String(try_at!(self, self.parse_string()))))
+                Ok(Json(JsonInner::String(self.parse_string()?)))
             }
             // arrays
             b'[' => {
                 self.eat();
                 let mut ret = vec![];
                 loop {
-                    try_at!(self, self.eat_whitespace());
-                    if !(ret.is_empty() && try_at!(self, self.peek_noeof()) == b']') {
-                        ret.push(try!(self.parse()));
-                        try_at!(self, self.eat_whitespace());
+                    self.eat_whitespace()?;
+                    if !(ret.is_empty() && self.peek_noeof()? == b']') {
+                        ret.push(self.parse()?);
+                        self.eat_whitespace()?;
                     }
-                    match try_at!(self, self.peek_noeof()) {
+                    match self.peek_noeof()? {
                         b',' => { self.eat(); }
                         b']' => { self.eat(); break; }
-                        _ => { return Err(Error::at(&self.iter, ErrorType::UnknownIdent)); }
+                        _ => { return Err(self.error_at(ErrorType::UnknownIdent)); }
                     }
                 }
                 Ok(Json(JsonInner::Array(ret)))
@@ -439,37 +456,37 @@ impl<I: Iterator<Item=io::Result<u8>>> Parser<I> {
                 self.eat();
                 let mut ret = vec![];
                 loop {
-                    try_at!(self, self.eat_whitespace());
+                    self.eat_whitespace()?;
                     // special-case {}
-                    if ret.is_empty() && try_at!(self, self.peek_noeof()) == b'}' {
+                    if ret.is_empty() && self.peek_noeof()? == b'}' {
                         self.eat();
                         break;
                     }
                     // parse key
-                    let key = try_at!(self, self.parse_string());
-                    try_at!(self, self.eat_whitespace());
+                    let key = self.parse_string()?;
+                    self.eat_whitespace()?;
                     // parse : separator
-                    let sep_ch = try_at!(self, self.peek_noeof());
+                    let sep_ch = self.peek_noeof()?;
                     if sep_ch == b':' {
                         self.eat();
-                        try_at!(self, self.eat_whitespace());
+                        self.eat_whitespace()?;
                     } else {
-                        return Err(Error::at(&self.iter, ErrorType::UnexpectedCharacter(sep_ch as char)));
+                        return Err(self.error_at(ErrorType::UnexpectedCharacter(sep_ch as char)));
                     }
                     // parse value
-                    let val = try!(self.parse());
+                    let val = self.parse()?;
                     ret.push((key, val));
-                    try_at!(self, self.eat_whitespace());
+                    self.eat_whitespace()?;
                     // parse , separator
-                    match try_at!(self, self.peek_noeof()) {
+                    match self.peek_noeof()? {
                         b',' => { self.eat(); },
                         b'}' /* { */ => { self.eat(); break; }
-                        x => { return Err(Error::at(&self.iter, ErrorType::UnexpectedCharacter(x as char))); }
+                        x => { return Err(self.error_at(ErrorType::UnexpectedCharacter(x as char))); }
                     }
                 }
                 Ok(Json(JsonInner::Object(ret)))
             }
-            _ => Err(Error::at(&self.iter, ErrorType::UnknownIdent))
+            _ => Err(self.error_at(ErrorType::UnknownIdent))
         }
     }
 }
