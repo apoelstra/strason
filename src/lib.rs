@@ -30,19 +30,84 @@
 // Clippy whitelist
 #![cfg_attr(feature = "clippy", allow(match_same_arms))]  // many false positives
 
-#[cfg(feature = "utf16")] extern crate encoding;
 extern crate serde;
 #[cfg(test)] extern crate serde_json;
 
-use serde::ser;
-use std::{fmt, io, ops};
+use serde::{de, ser};
+use std::{error, fmt, io, ops};
 
 pub mod parser;
 pub mod serializer;
 pub mod object;
+mod sentinel;
 
-pub use parser::Error;
-pub use object::from_serialize;
+pub use object::{Deserializer, Serializer};
+use sentinel::{IsSentinel, SENTINEL_STR};
+
+/// Publicly exported error type
+pub struct Error(ErrorInner);
+
+enum ErrorInner {
+    Parser(parser::Error),
+    Other(String),
+    Sentinel
+}
+
+impl From<parser::Error> for Error {
+    fn from(e: parser::Error) -> Error {
+        Error(ErrorInner::Parser(e))
+    }
+}
+
+impl error::Error for Error {
+    fn cause(&self) -> Option<&error::Error> {
+        match self.0 {
+            ErrorInner::Parser(ref e) => Some(e),
+            _ => None
+        }
+    }
+
+    fn description(&self) -> &str {
+        match self.0 {
+            ErrorInner::Parser(ref e) => e.description(),
+            ErrorInner::Other(ref s) => s,
+            ErrorInner::Sentinel => SENTINEL_STR
+        }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(error::Error::description(self))
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl de::Error for Error {
+    fn custom<T: fmt::Display>(error: T) -> Error {
+        if error.is_sentinel() {
+            Error(ErrorInner::Sentinel)
+        } else {
+            Error(ErrorInner::Other(error.to_string()))
+        }
+    }
+}
+
+impl ser::Error for Error {
+    fn custom<T: fmt::Display>(error: T) -> Error {
+        if error.is_sentinel() {
+            Error(ErrorInner::Sentinel)
+        } else {
+            Error(ErrorInner::Other(error.to_string()))
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum JsonInner {
@@ -67,23 +132,23 @@ pub struct Json(JsonInner);
 
 impl Json {
     /// Construct a Json object by parsing a byte iterator, e.g. from a Reader
-    pub fn from_iter<I: Iterator<Item=io::Result<u8>>>(it: I) -> Result<Json, parser::Error>  {
+    pub fn from_iter<I: Iterator<Item=io::Result<u8>>>(it: I) -> Result<Json, Error>  {
         parser::Parser::new(it).parse()
     }
 
     /// Construct a Json object by parsing a string
-    pub fn from_str(s: &str) -> Result<Json, parser::Error> {
+    pub fn from_str(s: &str) -> Result<Json, Error> {
         Json::from_iter(s.bytes().map(Ok))
     }
 
     /// Construct a Json object from a reader
-    pub fn from_reader<R: io::Read>(r: R) -> Result<Json, parser::Error> {
+    pub fn from_reader<R: io::Read>(r: R) -> Result<Json, Error> {
         Json::from_iter(r.bytes())
     }
 
-    /// Construct a Json object from a Serialize type
-    pub fn from_serialize<T: ser::Serialize>(t: &T) -> Result<Json, parser::Error> {
-        object::from_serialize(t)
+    /// Converts something serializable to a Json object
+    pub fn from_serialize<T: serde::Serialize>(val: T) -> Result<Json, Error> {
+        val.serialize(Serializer::new())
     }
 
     /// Returns a null, if this is a null
@@ -141,7 +206,7 @@ impl Json {
         serializer::serialize(self, &mut w)
     }
 
-    /// Reserialize the object to byte array
+    /// Serialize the object to byte array
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut ret = vec![];
         self.write_to(&mut ret).unwrap();
@@ -149,8 +214,8 @@ impl Json {
     }
 
     /// Convert the Json object to something deserializable
-    pub fn into_deserialize<T: serde::de::Deserialize>(self) -> Result<T, Error> {
-        object::into_deserialize(self)
+    pub fn into_deserialize<'a, T: serde::Deserialize<'a>>(self) -> Result<T, Error> {
+        de::Deserialize::deserialize(Deserializer::new(self))
     }
 }
 
@@ -215,35 +280,9 @@ impl From<Vec<(String, Json)>> for Json {
 
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use std::fmt::Write;
-
-        match self.0 {
-            JsonInner::Null => f.write_str("null"),
-            JsonInner::Bool(false) => f.write_str("false"),
-            JsonInner::Bool(true) => f.write_str("true"),
-            JsonInner::Number(ref nstr) => f.write_str(nstr),
-            JsonInner::String(ref sstr) => write!(f, "\"{}\"", sstr),
-            JsonInner::Array(ref v) => {
-                try!(f.write_char('['));
-                if !v.is_empty() {
-                    try!(write!(f, " {}", v[0]));
-                }
-                for elem in v.iter().skip(1) {
-                    try!(write!(f, ", {}", elem));
-                }
-                f.write_str(" ]")
-            }
-            JsonInner::Object(ref v) => {
-                try!(f.write_char('{'));
-                if !v.is_empty() {
-                    try!(write!(f, " \"{}\": {}", v[0].0, v[0].1));
-                }
-                for elem in v.iter().skip(1) {
-                    try!(write!(f, ", \"{}\": {}", elem.0, elem.1));
-                }
-                f.write_str(" }")
-            }
-        }
+        let mut v = vec![];
+        serializer::serialize(self, &mut v).unwrap();
+        f.write_str(unsafe { std::str::from_utf8_unchecked(&v) })
     }
 }
 
@@ -454,13 +493,13 @@ mod tests {
         format_roundtrip!("null");
         format_roundtrip!("true");
         format_roundtrip!("false");
-        format_roundtrip!("[ ]");
-        format_roundtrip!("{ }");
-        format_roundtrip!("[ true, false, true, true ]");
+        format_roundtrip!("[]");
+        format_roundtrip!("{}");
+        format_roundtrip!("[true, false, true, true]");
         format_roundtrip!("0");
         format_roundtrip!("1000");
         format_roundtrip!("\"Andrew\"");
-        format_roundtrip!("{ \"Andrew\": 10, \"Jonas\": 100 }");
+        format_roundtrip!("{\"Andrew\": 10, \"Jonas\": 100}");
     }
 }
 

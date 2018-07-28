@@ -1,6 +1,6 @@
 [package]
 name = "strason"
-version = "0.3.4"
+version = "0.4.0"
 authors = ["Andrew Poelstra <apoelstra@wpsoftware.net>"]
 license = "CC0-1.0"
 homepage = "https://github.com/apoelstra/strason/"
@@ -9,16 +9,14 @@ documentation = "https://www.wpsoftware.net/rustdoc/strason/"
 description = "Json parser that preserves field ordering and stores numbers as strings, preserving their full data"
 
 [features]
-default = ["utf16"]
-utf16 = ["encoding"]
+# Disabling utf16 will allow compilation on Rust 1.14.0, at the cost of being
+# unable to serialize non-ASCII JSON objects
+utf16 = []
+default = [ "utf16" ]
 
 [dependencies]
-serde = "0.6"
-
-[dependencies.encoding]
-version = "0.2"
-optional = true
+serde = "1.0"
 
 [dev-dependencies]
-serde_json = "0.6"
+serde_json = "1.0"
 
