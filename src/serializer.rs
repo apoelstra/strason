@@ -174,6 +174,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature="utf16")]
     fn test_round_trip_utf16() {
         assert!(round_trip("\"\\u0000\""));
         assert!(round_trip("\"\\ucafe\\ubabe\""));
