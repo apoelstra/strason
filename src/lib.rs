@@ -213,11 +213,6 @@ impl Json {
         ret
     }
 
-    /// Serialize the object to a string
-    pub fn to_string(&self) -> String {
-        String::from_utf8(self.to_bytes()).unwrap()
-    }
-
     /// Convert the Json object to something deserializable
     pub fn into_deserialize<'a, T: serde::Deserialize<'a>>(self) -> Result<T, Error> {
         de::Deserialize::deserialize(Deserializer::new(self))
@@ -285,35 +280,9 @@ impl From<Vec<(String, Json)>> for Json {
 
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use std::fmt::Write;
-
-        match self.0 {
-            JsonInner::Null => f.write_str("null"),
-            JsonInner::Bool(false) => f.write_str("false"),
-            JsonInner::Bool(true) => f.write_str("true"),
-            JsonInner::Number(ref nstr) => f.write_str(nstr),
-            JsonInner::String(ref sstr) => write!(f, "\"{}\"", sstr),
-            JsonInner::Array(ref v) => {
-                try!(f.write_char('['));
-                if !v.is_empty() {
-                    try!(write!(f, " {}", v[0]));
-                }
-                for elem in v.iter().skip(1) {
-                    try!(write!(f, ", {}", elem));
-                }
-                f.write_str(" ]")
-            }
-            JsonInner::Object(ref v) => {
-                try!(f.write_char('{'));
-                if !v.is_empty() {
-                    try!(write!(f, " \"{}\": {}", v[0].0, v[0].1));
-                }
-                for elem in v.iter().skip(1) {
-                    try!(write!(f, ", \"{}\": {}", elem.0, elem.1));
-                }
-                f.write_str(" }")
-            }
-        }
+        let mut v = vec![];
+        serializer::serialize(self, &mut v).unwrap();
+        f.write_str(unsafe { std::str::from_utf8_unchecked(&v) })
     }
 }
 
@@ -524,13 +493,13 @@ mod tests {
         format_roundtrip!("null");
         format_roundtrip!("true");
         format_roundtrip!("false");
-        format_roundtrip!("[ ]");
-        format_roundtrip!("{ }");
-        format_roundtrip!("[ true, false, true, true ]");
+        format_roundtrip!("[]");
+        format_roundtrip!("{}");
+        format_roundtrip!("[true, false, true, true]");
         format_roundtrip!("0");
         format_roundtrip!("1000");
         format_roundtrip!("\"Andrew\"");
-        format_roundtrip!("{ \"Andrew\": 10, \"Jonas\": 100 }");
+        format_roundtrip!("{\"Andrew\": 10, \"Jonas\": 100}");
     }
 }
 

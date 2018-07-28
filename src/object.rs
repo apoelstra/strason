@@ -130,9 +130,9 @@ impl ser::Serialize for Json {
             JsonInner::String(ref st) => s.serialize_str(st),
             JsonInner::Array(ref arr) => ser::Serialize::serialize(arr, s),
             JsonInner::Object(ref arr) => {
-                use ser::SerializeMap;
+                use serde::ser::SerializeMap;
                 let mut map = s.serialize_map(Some(arr.len()))?;
-                for (ref k, ref v) in arr {
+                for &(ref k, ref v) in arr {
                     map.serialize_key(k)?;
                     map.serialize_value(v)?;
                 }
@@ -371,7 +371,7 @@ impl<'de> de::MapAccess<'de> for SeqDeserializer<(String, Json)> {
     }
 
     fn next_value_seed<T: de::DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value, Error> {
-        use de::Error;
+        use serde::de::Error;
         match self.next_map_val.take() {
             Some(val) => {
                 seed.deserialize(Deserializer(val))
@@ -582,7 +582,7 @@ impl ser::SerializeMap for SerializeSeq<(String, Json)> {
             self.next_key = Some(s);
             Ok(())
         } else {
-            use de::Error;
+            use serde::de::Error;
             Err(Error::custom("can only serialize maps with stringy keys"))
         }
     }
@@ -673,37 +673,28 @@ impl ser::SerializeStructVariant for SerializeTupleVariant<(String, Json)> {
 
 #[cfg(test)]
 mod tests {
-    use serde::de;
     use std::collections::HashMap;
-    use {Json, JsonInner};
-
-    use super::{Serializer, Deserializer};
-
-    macro_rules! roundtrip_success(
-        ($t:ty, $e:expr) => ({
-            let obj: $t = $e;
-            match Json::from_serialize(&obj) {
-                Ok(val) => {
-                    use serde::ser::Serialize;
-                    // "Deserialize" as Json
-                    let alt_json: Result<Json, _> = val.clone().into_deserialize();
-                    assert!(alt_json.is_ok());
-                    assert_eq!(alt_json.unwrap(), val);
-                    // "Serialize" as Json
-                    let serval = val.serialize(Serializer::new()).unwrap();
-                    assert_eq!(serval, val);
-                    // Deserialize as object
-                    let res: Result<$t, _> = val.into_deserialize();
-                    assert!(res.is_ok());
-                    assert_eq!(res.unwrap(), obj);
-                }
-                Err(e) => { panic!("Serializing into Json failed: {:?}", e); }
-            }
-        })
-    );
+    use Json;
 
     #[test]
     fn serde_roundtrip() {
+        macro_rules! roundtrip_success(
+            ($t:ty, $e:expr) => ({
+                let obj: $t = $e;
+                let json = Json::from_serialize(&obj).expect("serializable object");
+
+                // Roundtrip to/from json
+                let deser_json: Json = json.clone().into_deserialize().expect("deserialize json to json");
+                assert_eq!(json, deser_json);
+                let ser_json = Json::from_serialize(json.clone()).expect("serialize json to json");
+                assert_eq!(ser_json, json);
+
+                // Deserialize as object
+                let res: $t = json.into_deserialize().expect("deserialize json");
+                assert_eq!(obj, res);
+            })
+        );
+
         roundtrip_success!((), ());
         roundtrip_success!(String, "".to_owned());
         roundtrip_success!(String, "Thing".to_owned());
@@ -744,85 +735,45 @@ mod tests {
         roundtrip_success!(HashMap<String, String>, map);
     }
 
-    macro_rules! deserialize_test(
-        ($e:expr, $result:expr) => ({
-            let d = Deserializer::new($e);
-            let json: Result<Json, _> = de::Deserialize::deserialize(d);
-            assert!(json.is_ok());
-            let json_str = json.unwrap().to_string();
-            assert_eq!(json_str, $result);
-        })
-    );
-
     #[test]
-    fn serde_deserialize() {
-        macro_rules! check_num(
-           ($t:ident) => ({
-               use std::$t;
-               let mut val: $t;
+    fn serde_json_roundtrip() {
+        use std::str::FromStr;
+        use serde_json;
 
-               val = 0;
-               deserialize_test!(val, format!("{}", val));
-               val = 100;
-               deserialize_test!(val, format!("{}", val));
-               val = $t::MIN;
-               deserialize_test!(val, format!("{}", val));
-               val = $t::MAX;
-               deserialize_test!(val, format!("{}", val));
-           })
+        macro_rules! serde_json_rt(
+            ($serde_json:expr, $strason:expr) => ({
+                // The two libraries differ in spacing; we check that they can read each others' output
+
+                // serde_json -> serde_json
+                let strason_fromstr = Json::from_str($serde_json).expect("strason parsing string");
+                assert_eq!(serde_json::to_string(&strason_fromstr).unwrap(), $serde_json);
+                // strason -> serde_json
+                let strason_fromstr = Json::from_str($strason).expect("strason parsing string");
+                assert_eq!(serde_json::to_string(&strason_fromstr).unwrap(), $serde_json);
+
+                // serde_json -> strason
+                let json_fromstr = serde_json::Value::from_str($serde_json).expect("strason parsing string");
+                let strason = Json::from_serialize(json_fromstr).expect("serialize serde_json to strason");
+                assert_eq!(strason.to_string(), $strason);
+                // strason -> strason
+                let json_fromstr = serde_json::Value::from_str($strason).expect("strason parsing string");
+                let strason = Json::from_serialize(json_fromstr).expect("serialize serde_json to strason");
+                assert_eq!(strason.to_string(), $strason);
+            })
         );
 
-        check_num!(u8);
-        check_num!(u16);
-        check_num!(u32);
-        check_num!(u64);
-        check_num!(usize);
-        check_num!(i8);
-        check_num!(i16);
-        check_num!(i32);
-        check_num!(i64);
-        check_num!(isize);
-
-        deserialize_test!(0.375f32, "0.375");
-        deserialize_test!(0.375f64, "0.375");
-        deserialize_test!("Test1".to_string(), "\"Test1\"");
-        deserialize_test!((), "null");
-        deserialize_test!(true, "true");
-        deserialize_test!(false, "false");
-
-        deserialize_test!(
-            Json(JsonInner::Array(vec![
-                Json::from(true),
-                Json::from(false),
-                Json::from(true),
-                Json::from(true)
-            ])),
-            "[true, false, true, true]"
+        serde_json_rt!("null", "null");
+        serde_json_rt!("true", "true");
+        serde_json_rt!("false", "false");
+        serde_json_rt!("\"test string\"", "\"test string\"");
+        serde_json_rt!(
+            "[true,false,false,\"thing\"]",
+            "[true, false, false, \"thing\"]"
         );
-
-        // TODO the ordering that HashMap gives us is unpredictable so we can't directly
-        // test multiple values
-        let mut map = HashMap::new();
-        map.insert("Test".to_owned(), "Testval".to_owned());
-        let json = Json::from_serialize(map).unwrap();
-        deserialize_test!(json, "{\"Test\": \"Testval\"}");
-    }
-
-    macro_rules! serialize_test(
-        ($s:expr) => ({
-            use serde_json;
-            assert_eq!(serde_json::to_string(&Json::from_str($s).unwrap()).unwrap(), $s);
-        })
-    );
-
-    #[test]
-    fn serde_serialize() {
-        serialize_test!("null");
-        serialize_test!("true");
-        serialize_test!("false");
-        serialize_test!("\"test string\"");
-        serialize_test!("[true,false,false,\"thing\"]");
-        serialize_test!("{\"obj\":\"val\",\"obj2\":\"val2\"}");
+        serde_json_rt!(
+            "{\"obj\":\"val\",\"obj2\":\"val2\"}",
+            "{\"obj\": \"val\", \"obj2\": \"val2\"}"
+        );
     }
 }
 

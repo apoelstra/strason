@@ -8,6 +8,12 @@ repository = "https://github.com/apoelstra/strason/"
 documentation = "https://www.wpsoftware.net/rustdoc/strason/"
 description = "Json parser that preserves field ordering and stores numbers as strings, preserving their full data"
 
+[features]
+# Disabling utf16 will allow compilation on Rust 1.14.0, at the cost of being
+# unable to serialize non-ASCII JSON objects
+utf16 = []
+default = [ "utf16" ]
+
 [dependencies]
 serde = "1.0"
 

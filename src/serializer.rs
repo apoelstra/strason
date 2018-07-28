@@ -31,6 +31,7 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
             '\\' => { try!(w.write(b"\\\\")); }
             '"' => { try!(w.write(b"\\\"")); }
             '\x20'...'\x7e' => { try!(w.write(&[ch as u8])); }
+#[cfg(feature="utf16")]
             _ => {
                 let mut utf16 = [0u16; 2];
                 let subslice = ch.encode_utf16(&mut utf16);
@@ -38,6 +39,8 @@ fn serialize_string<W: io::Write>(s: &str, mut w: W) -> io::Result<()> {
                     try!(write!(w, "\\u{:02x}{:02x}", word >> 8 as u8, word as u8));
                 }
             }
+#[cfg(not(feature="utf16"))]
+            _ => { try!(write!(w, "{}", ch)); }
         }
     }
     try!(w.write(b"\""));
